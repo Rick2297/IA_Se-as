@@ -4,6 +4,8 @@ import os
 import glob
 import argparse
 from pathlib import Path
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.model_selection import train_test_split
@@ -12,17 +14,12 @@ from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.layers import GRU, Dense, Masking, Dropout, Input
 from tensorflow.keras.utils import to_categorical
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
-from tensorflow.keras import mixed_precision # Importación para precisión mixta
-# --- 1. FUNCIONES DE AYUDA Y PREPROCESAMIENTO ---
+from tensorflow.keras import mixed_precision 
 def augment_data(sequence, noise_level=0.005):
     """Aplica ruido gaussiano a una secuencia para aumentar los datos."""
     noise = np.random.normal(0, noise_level, sequence.shape)
     return sequence + noise
 def load_sequences_and_labels(data_path, actions):
-    """
-    Crea una lista de todas las rutas a las secuencias y sus etiquetas correspondientes.
-    No carga los datos en memoria, solo las rutas.
-    """
     filepaths = []
     for action_idx, action in enumerate(actions):
         action_path = Path(data_path) / action
@@ -60,11 +57,8 @@ def data_generator(filepaths, actions, frames_per_seq, expected_dim, is_training
         elif sequence.shape[1] > expected_dim:
             print(f"[AVISO] Formato inesperado, ignorando: {sequence_path}")
             continue
-        # --- Aumento de Datos (Solo para entrenamiento) ---
         if is_training:
             sequence = augment_data(sequence)
-            
-        # Usar to_categorical para la etiqueta
         yield sequence.astype(np.float32), to_categorical(label_idx, num_classes=num_classes).astype(np.float32)
 def build_model(num_classes, frames_per_seq, expected_dim):
     """
@@ -94,7 +88,7 @@ def build_model(num_classes, frames_per_seq, expected_dim):
     )
     model.summary()
     return model
-def plot_history(history):
+def plot_history(history, model_folder):
     """Visualiza el historial de entrenamiento."""
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
     ax1.plot(history.history['accuracy'], label='Train Accuracy')
@@ -105,31 +99,31 @@ def plot_history(history):
     ax2.plot(history.history['val_loss'], label='Validation Loss')
     ax2.legend()
     ax2.set_title('Loss')
-    plt.savefig('training_history.png')
-    print("\n[INFO] Gráfico de historial guardado en 'training_history.png'")
-    # plt.show() # <-- CORRECCIÓN: Eliminado para evitar el RuntimeError de Tkinter
-    plt.close(fig) # <-- Buena práctica: Cierra la figura para liberar memoria
-def evaluate_model(model, test_dataset, actions):
+    save_path = model_folder / 'training_history.png'
+    plt.savefig(save_path)
+    print(f"\n[INFO] Gráfico de historial guardado en '{save_path}'")
+    plt.close(fig) # Buena práctica: Cierra la figura para liberar memoria
+
+def evaluate_model(model, test_dataset, actions, model_folder):
     """Muestra métricas de evaluación detalladas."""
     print("\n[INFO] Evaluando modelo...")
     y_true = np.concatenate([y for x, y in test_dataset], axis=0)
     y_true_labels = np.argmax(y_true, axis=1)
-    
     y_pred_probs = model.predict(test_dataset)
     y_pred_labels = np.argmax(y_pred_probs, axis=1)
     print("\n--- Reporte de Clasificación ---")
     print(classification_report(y_true_labels, y_pred_labels, target_names=actions))
     print("\n--- Matriz de Confusión ---")
     cm = confusion_matrix(y_true_labels, y_pred_labels)
-    fig = plt.figure(figsize=(10, 8)) # <-- Captura la figura en una variable
+    fig = plt.figure(figsize=(10, 8))
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=actions, yticklabels=actions)
     plt.title('Matriz de Confusión')
     plt.ylabel('Etiqueta Real')
     plt.xlabel('Etiqueta Predicha')
-    plt.savefig('confusion_matrix.png')
-    print("[INFO] Matriz de confusión guardada en 'confusion_matrix.png'")
-    # plt.show() # <-- CORRECCIÓN: Eliminado para evitar el RuntimeError de Tkinter
-    plt.close(fig) # <-- Buena práctica: Cierra la figura para liberar memoria
+    save_path = model_folder / 'confusion_matrix.png'
+    plt.savefig(save_path)
+    print(f"[INFO] Matriz de confusión guardada en '{save_path}'")
+    plt.close(fig) # Buena práctica: Cierra la figura para liberar memoria
 # --- 2. SCRIPT PRINCIPAL ---
 def main(args):
     # 1. Asegura que las optimizaciones de OneDNN estén habilitadas
@@ -137,13 +131,9 @@ def main(args):
     # 2. Activa el compilador XLA (Accelerated Linear Algebra) para fusionar operaciones
     tf.config.optimizer.set_jit(True)
     # 3. Configuración de hilos para tu CPU i7-1185G7 (4 núcleos físicos / 8 hilos lógicos)
-    # Usa los núcleos físicos para operaciones internas (cálculos matemáticos)
-# 3. Configuración de hilos para tu CPU i3-1215U (6 núcleos / 8 hilos)
-# Usa los núcleos de rendimiento y algunos de eficiencia para operaciones internas
-    tf.config.threading.set_intra_op_parallelism_threads(6)
-# Usa los 8 hilos lógicos para coordinación entre operaciones
+    tf.config.threading.set_intra_op_parallelism_threads(4) 
     tf.config.threading.set_inter_op_parallelism_threads(8)
-  
+    # 4. 🚀 Activa la precisión mixta para acelerar cálculos y reducir memoria
     mixed_precision.set_global_policy('mixed_bfloat16')
     print("\n[INFO] Optimizaciones de CPU (OneDNN, XLA, Precisión Mixta) activadas.")
     DATA_PATH = Path(args.data_path)
@@ -174,13 +164,11 @@ def main(args):
     if not all_filepaths:
         print(f"[ERROR] No se encontraron archivos de secuencias .npy en las carpetas de gestos.")
         return
-        
     train_files, test_files = train_test_split(all_filepaths, test_size=0.20, random_state=42, stratify=[label for path, label in all_filepaths])
     print(f"\n[INFO] Total de muestras: {len(all_filepaths)}")
     print(f"Muestras de entrenamiento: {len(train_files)}")
     print(f"Muestras de prueba: {len(test_files)}")
     # --- Creación de `tf.data.Dataset` ---
-    # Esto es el corazón de la eficiencia en CPU y memoria
     print("\n[INFO] Creando pipelines de datos eficientes con tf.data...")
     output_signature = (
         tf.TensorSpec(shape=(FRAMES_PER_SEQUENCE, EXPECTED_DIM), dtype=tf.float32),
@@ -196,7 +184,7 @@ def main(args):
     ).batch(BATCH_SIZE).prefetch(buffer_size=tf.data.AUTOTUNE)
     # --- Construcción y Entrenamiento ---
     model = build_model(num_classes, FRAMES_PER_SEQUENCE, EXPECTED_DIM)
-    # Callbacks para un entrenamiento inteligente
+    # Callbacks
     early_stopping = EarlyStopping(monitor='val_loss', patience=25, restore_best_weights=True, verbose=1)
     reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=10, min_lr=0.00001, verbose=1)
     model_checkpoint_path = str(MODEL_FOLDER / "modelo_gestos.keras")
@@ -217,11 +205,11 @@ def main(args):
     # --- Evaluación y Guardado ---
     print("\n[INFO] Entrenamiento completado.")
     print(f"\n[INFO] Cargando el mejor modelo desde: {model_checkpoint_path}")
-    # Asegurarse de que el modelo cargado compile con las optimizaciones
     best_model = load_model(model_checkpoint_path)
-    plot_history(history)
-    evaluate_model(best_model, test_ds, actions)
-    print(f"\n[✅] Modelo guardado en: '{MODEL_FOLDER}'")
+    # Pasa la variable MODEL_FOLDER a las funciones de trazado
+    plot_history(history, MODEL_FOLDER)
+    evaluate_model(best_model, test_ds, actions, MODEL_FOLDER)
+    print(f"\n[✅] Modelo y gráficos guardados en: '{MODEL_FOLDER}'")
     print("\n¡Proceso finalizado con éxito!")
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Entrenamiento eficiente de modelo para gestos.')
