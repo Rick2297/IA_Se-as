@@ -70,6 +70,11 @@ python camaraVECTORES.py
 La aplicación activará tu cámara principal y abrirá la interfaz gráfica.
 ¡Ya puedes comenzar a realizar señas y ver cómo neuroLESSA las interpreta en texto y voz!
 
+# Requerimientos 
+- Procesador Intel® Core™ i5-8250U
+- 8 gb de ram
+- Espacio en disco 15 gb
+
 # 👥 Autores
 - Jorge Ernesto Majano Santos
 - Richard Jonathan Quinteros Mendoza
